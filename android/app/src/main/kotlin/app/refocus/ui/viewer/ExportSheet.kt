@@ -1,5 +1,6 @@
 package app.refocus.ui.viewer
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -14,12 +15,10 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined._3dRotation
 import androidx.compose.material.icons.outlined.Animation
 import androidx.compose.material.icons.outlined.CenterFocusStrong
 import androidx.compose.material.icons.outlined.Image
-import androidx.compose.material.icons.outlined.Inventory2
-import androidx.compose.material.icons.outlined.TouchApp
+import androidx.compose.material.icons.outlined._3dRotation
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -32,6 +31,7 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
@@ -49,21 +49,20 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import app.refocus.core.lf.AnimationKind
-import app.refocus.export.AnimationFormat
 import app.refocus.export.StillContent
-import app.refocus.export.StillFormat
 import app.refocus.ui.viewer.gl.ViewMode
+import kotlin.math.roundToInt
 
 /** Last used export options, for this session. */
 private object ExportPrefs {
     var tab = 0
-    var format = StillFormat.Jpeg
     var scale = 2
     var depth16 = false
     var kind = AnimationKind.FocusSweep
-    var animFormat = AnimationFormat.Mp4
+    var nearToFar = true
     var animScale = 2
     var seconds = 3
+    var cycles = 1
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -73,10 +72,9 @@ fun ExportSheet(
     imageHeight: Int,
     currentView: ViewMode,
     hasDepth: Boolean,
-    hasRaw: Boolean,
-    onStill: (StillContent, StillFormat, Int, Boolean) -> Unit,
+    pinhole: Boolean,
+    onStill: (StillContent, Int, Boolean) -> Unit,
     onAnimation: (AnimationKind, AnimationRequest) -> Unit,
-    onOriginal: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -86,18 +84,15 @@ fun ExportSheet(
             Text("Export", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(horizontal = 24.dp))
             Spacer(Modifier.height(8.dp))
             PrimaryTabRow(selectedTabIndex = tab, containerColor = Color.Transparent) {
-                listOf(
-                    "Image" to Icons.Outlined.Image,
-                    "Animation" to Icons.Outlined.Animation,
-                    "Original" to Icons.Outlined.Inventory2,
-                ).forEachIndexed { i, (label, icon) ->
-                    Tab(
-                        selected = tab == i,
-                        onClick = { tab = i; ExportPrefs.tab = i },
-                        text = { Text(label) },
-                        icon = { Icon(icon, null) },
-                    )
-                }
+                listOf("Image" to Icons.Outlined.Image, "Animation" to Icons.Outlined.Animation)
+                    .forEachIndexed { i, (label, icon) ->
+                        Tab(
+                            selected = tab == i,
+                            onClick = { tab = i; ExportPrefs.tab = i },
+                            text = { Text(label) },
+                            icon = { Icon(icon, null) },
+                        )
+                    }
             }
             Column(
                 Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 16.dp),
@@ -105,8 +100,7 @@ fun ExportSheet(
             ) {
                 when (tab) {
                     0 -> StillTab(imageWidth, imageHeight, currentView, hasDepth, onStill)
-                    1 -> AnimationTab(imageWidth, hasDepth, onAnimation)
-                    else -> OriginalTab(hasRaw, onOriginal)
+                    else -> AnimationTab(imageWidth, hasDepth, pinhole, onAnimation)
                 }
             }
         }
@@ -119,7 +113,7 @@ private fun ColumnScope.StillTab(
     h: Int,
     currentView: ViewMode,
     hasDepth: Boolean,
-    onStill: (StillContent, StillFormat, Int, Boolean) -> Unit,
+    onStill: (StillContent, Int, Boolean) -> Unit,
 ) {
     var content by remember {
         mutableStateOf(
@@ -130,7 +124,6 @@ private fun ColumnScope.StillTab(
             }
         )
     }
-    var format by remember { mutableStateOf(ExportPrefs.format) }
     var scale by remember { mutableIntStateOf(ExportPrefs.scale) }
     var depth16 by remember { mutableStateOf(ExportPrefs.depth16) }
 
@@ -138,10 +131,9 @@ private fun ColumnScope.StillTab(
         Segmented(StillContent.entries, content, { it.label }, enabled = { it == StillContent.Photo || hasDepth }) { content = it }
     }
     if (!hasDepth) Hint("Depth map and overlay are available once depth estimation has finished.")
-    Section("Format") { Segmented(StillFormat.entries, format, { it.label }) { format = it; ExportPrefs.format = it } }
     Section("Size") {
         Segmented(listOf(1, 2, 3, 4), scale, { "$it×" }) { scale = it; ExportPrefs.scale = it }
-        Hint("${w * scale} × ${h * scale} px")
+        Hint("${w * scale} × ${h * scale} px JPEG")
     }
     if (content == StillContent.Depth) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -153,57 +145,60 @@ private fun ColumnScope.StillTab(
             Switch(checked = depth16, onCheckedChange = { depth16 = it; ExportPrefs.depth16 = it })
         }
     }
-    Button(onClick = { onStill(content, format, scale, depth16) }, modifier = Modifier.fillMaxWidth()) {
+    Button(onClick = { onStill(content, scale, depth16) }, modifier = Modifier.fillMaxWidth()) {
         Text("Save to gallery")
     }
 }
 
 @Composable
-private fun ColumnScope.AnimationTab(w: Int, hasDepth: Boolean, onAnimation: (AnimationKind, AnimationRequest) -> Unit) {
+private fun ColumnScope.AnimationTab(w: Int, hasDepth: Boolean, pinhole: Boolean, onAnimation: (AnimationKind, AnimationRequest) -> Unit) {
     var kind by remember { mutableStateOf(ExportPrefs.kind) }
-    var format by remember { mutableStateOf(ExportPrefs.animFormat) }
+    var nearToFar by remember { mutableStateOf(ExportPrefs.nearToFar) }
     var scale by remember { mutableIntStateOf(ExportPrefs.animScale) }
     var seconds by remember { mutableIntStateOf(ExportPrefs.seconds) }
-    val needsDepth = kind != AnimationKind.PerspectiveOrbit
+    var cycles by remember { mutableIntStateOf(ExportPrefs.cycles) }
+    val needsDepth = kind == AnimationKind.FocusSweep
 
     Column(Modifier.selectableGroup()) {
         AnimationOption(AnimationKind.FocusSweep, kind, Icons.Outlined.CenterFocusStrong, "Focus sweep",
-            "Focus travels from near to far and back") { kind = it; ExportPrefs.kind = it }
+            "Focus travels through the scene") { kind = it; ExportPrefs.kind = it }
         AnimationOption(AnimationKind.PerspectiveOrbit, kind, Icons.Outlined._3dRotation, "Perspective orbit",
             "The viewpoint circles around the lens for a 3D effect") { kind = it; ExportPrefs.kind = it }
-        AnimationOption(AnimationKind.TapToTap, kind, Icons.Outlined.TouchApp, "Tap-to-tap focus",
-            "Focus pulls between two points you choose") { kind = it; ExportPrefs.kind = it }
     }
-    if (needsDepth && !hasDepth) Hint("This animation needs the depth map, which is still being estimated.")
-    Section("Format") {
-        Segmented(AnimationFormat.entries, format, { it.label }) {
-            format = it; ExportPrefs.animFormat = it
-            if (it == AnimationFormat.Gif && scale > 2) { scale = 2; ExportPrefs.animScale = 2 }
+    AnimatedVisibility(kind == AnimationKind.FocusSweep) {
+        Section("Direction") {
+            Segmented(listOf(true, false), nearToFar, { if (it) "Near → far" else "Far → near" }) {
+                nearToFar = it; ExportPrefs.nearToFar = it
+            }
         }
-        if (format == AnimationFormat.Gif) Hint("GIFs are large and limited to 256 colours. MP4 looks better and is smaller.")
     }
+    if (needsDepth && !hasDepth) Hint("The focus sweep needs the depth map, which is still being estimated.")
+    Hint(
+        if (kind == AnimationKind.FocusSweep && pinhole) "Depth of field is set to pinhole, so everything stays sharp and the sweep won't show. Choose a shallower depth of field first."
+        else if (kind == AnimationKind.FocusSweep) "Uses your current depth of field."
+        else "Uses your current focus and depth of field (at most f/5.3, so the viewpoint can move)."
+    )
     Section("Size") {
-        val sizes = if (format == AnimationFormat.Gif) listOf(1, 2) else listOf(1, 2, 3)
-        Segmented(sizes, scale, { "$it×" }) { scale = it; ExportPrefs.animScale = it }
-        Hint("about ${w * scale} px wide")
+        Segmented(listOf(1, 2, 3), scale, { "$it×" }) { scale = it; ExportPrefs.animScale = it }
+        Hint("about ${w * scale} px wide, MP4")
     }
-    Section("Length") { Segmented(listOf(2, 3, 5), seconds, { "$it s" }) { seconds = it; ExportPrefs.seconds = it } }
+    val orbit = kind == AnimationKind.PerspectiveOrbit
+    StepSlider(
+        label = if (orbit) "Length of one orbit" else "Length",
+        value = seconds, range = 1..10, valueText = "$seconds s",
+    ) { seconds = it; ExportPrefs.seconds = it }
+    AnimatedVisibility(orbit) {
+        StepSlider(
+            label = "Orbits", value = cycles, range = 1..5,
+            valueText = if (cycles == 1) "1 time" else "$cycles times",
+        ) { cycles = it; ExportPrefs.cycles = it }
+    }
+    if (orbit) Hint("Video length: ${seconds * cycles} s")
     Button(
-        onClick = { onAnimation(kind, AnimationRequest(format, scale, seconds)) },
+        onClick = { onAnimation(kind, AnimationRequest(scale, seconds, nearToFar, if (orbit) cycles else 1)) },
         enabled = !needsDepth || hasDepth,
         modifier = Modifier.fillMaxWidth(),
-    ) { Text(if (kind == AnimationKind.TapToTap) "Choose the two points" else "Create animation") }
-}
-
-@Composable
-private fun ColumnScope.OriginalTab(hasRaw: Boolean, onOriginal: () -> Unit) {
-    Text(
-        "The unprocessed 16 MB light-field RAW and its metadata (.TXT), exactly as stored on the camera. " +
-            "They're saved to Download/Refocus, not to the gallery.",
-        style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-    Button(onClick = onOriginal, enabled = hasRaw, modifier = Modifier.fillMaxWidth()) { Text("Save RAW + metadata") }
+    ) { Text("Create video") }
 }
 
 @Composable
@@ -230,6 +225,24 @@ private fun Section(label: String, content: @Composable ColumnScope.() -> Unit) 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
         content()
+    }
+}
+
+/** A latching slider over whole numbers. */
+@Composable
+private fun StepSlider(label: String, value: Int, range: IntRange, valueText: String, onChange: (Int) -> Unit) {
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f))
+            Text(valueText, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+        }
+        Slider(
+            value = value.toFloat(),
+            onValueChange = { onChange(it.roundToInt().coerceIn(range)) },
+            valueRange = range.first.toFloat()..range.last.toFloat(),
+            steps = range.last - range.first - 1,
+        )
     }
 }
 

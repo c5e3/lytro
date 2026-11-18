@@ -6,7 +6,6 @@ import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Environment
 import android.provider.MediaStore
-import app.refocus.core.export.GifEncoder
 import app.refocus.core.export.Png16
 import app.refocus.core.lf.AnimationKind
 import app.refocus.core.lf.Animations
@@ -24,12 +23,6 @@ import java.time.format.DateTimeFormatter
 import kotlin.math.roundToInt
 
 enum class StillContent(val label: String) { Photo("Photo"), Depth("Depth map"), Overlay("Overlay") }
-enum class StillFormat(val label: String, val mime: String, val ext: String) {
-    Jpeg("JPEG", "image/jpeg", "jpg"), Png("PNG", "image/png", "png")
-}
-enum class AnimationFormat(val label: String, val mime: String, val ext: String) {
-    Mp4("MP4", "video/mp4", "mp4"), Gif("GIF", "image/gif", "gif")
-}
 
 data class Exported(val uri: Uri, val mime: String, val displayName: String)
 
@@ -47,7 +40,6 @@ class Exporter(private val context: Context, private val library: Library) {
         lf: LightField,
         params: RenderParams,
         content: StillContent,
-        format: StillFormat,
         scale: Int,
         withDepth16: Boolean,
     ): List<Exported> = withContext(Dispatchers.Default) {
@@ -62,10 +54,10 @@ class Exporter(private val context: Context, private val library: Library) {
         val scaled = ImageOps.resizeArgb(argb, lf.width, lf.height, w, h)
         val bmp = Bitmap.createBitmap(scaled, w, h, Bitmap.Config.ARGB_8888)
         val suffix = when (content) { StillContent.Photo -> "refocused"; StillContent.Depth -> "depth"; StillContent.Overlay -> "overlay" }
-        val name = "${item.name}_${suffix}_$stamp.${format.ext}"
+        val name = "${item.name}_${suffix}_$stamp.jpg"
         val out = ArrayList<Exported>()
-        out += insert(MediaKind.Image, name, format.mime, item) { os ->
-            bmp.compress(if (format == StillFormat.Jpeg) Bitmap.CompressFormat.JPEG else Bitmap.CompressFormat.PNG, 95, os)
+        out += insert(MediaKind.Image, name, "image/jpeg", item) { os ->
+            bmp.compress(Bitmap.CompressFormat.JPEG, 95, os)
         }
         bmp.recycle()
         if (withDepth16 && content == StillContent.Depth) {
@@ -77,63 +69,43 @@ class Exporter(private val context: Context, private val library: Library) {
         out
     }
 
+    /** An H.264 MP4 at 30 fps, to Movies/Refocus. */
     suspend fun exportAnimation(
         item: PictureItem,
         lf: LightField,
         kind: AnimationKind,
         base: RenderParams,
-        focusA: Float?,
-        focusB: Float?,
-        format: AnimationFormat,
+        nearToFar: Boolean,
+        cycles: Int,
         scale: Int,
         seconds: Int,
         progress: (Float) -> Unit,
     ): Exported = withContext(Dispatchers.Default) {
-        val fps = if (format == AnimationFormat.Gif) 25 else 30
-        val frames = Animations.frames(kind, lf, base, seconds * fps, focusA, focusB)
+        val fps = 30
+        // [seconds] is the length of the sweep, or of one orbit (repeated [cycles] times)
+        val repeats = if (kind == AnimationKind.PerspectiveOrbit) cycles.coerceAtLeast(1) else 1
+        val frames = Animations.frames(kind, lf, base, seconds * fps * repeats, nearToFar, repeats)
         // H.264 encoders want sizes in multiples of 16
-        val (w, h) = if (format == AnimationFormat.Mp4) {
-            ((lf.width * scale / 16f).roundToInt() * 16) to ((lf.height * scale / 16f).roundToInt() * 16)
-        } else (lf.width * scale) to (lf.height * scale)
+        val w = (lf.width * scale / 16f).roundToInt() * 16
+        val h = (lf.height * scale / 16f).roundToInt() * 16
         val label = when (kind) {
-            AnimationKind.FocusSweep -> "focus-sweep"
+            AnimationKind.FocusSweep -> if (nearToFar) "focus-near-to-far" else "focus-far-to-near"
             AnimationKind.PerspectiveOrbit -> "orbit"
-            AnimationKind.TapToTap -> "focus-pull"
         }
-        val name = "${item.name}_${label}_$stamp.${format.ext}"
-        val renderShare = if (format == AnimationFormat.Gif) 0.8f else 0.97f
-
-        fun frameArgb(i: Int): IntArray {
-            val argb = lf.toArgb(lf.render(frames[i]))
-            return ImageOps.resizeArgb(argb, lf.width, lf.height, w, h)
-        }
-
-        val mediaKind = if (format == AnimationFormat.Mp4) MediaKind.Video else MediaKind.Image
-        when (format) {
-            AnimationFormat.Mp4 -> insertWithFd(mediaKind, name, format.mime, item) { fd ->
-                val writer = Mp4Writer(fd, w, h, fps)
-                try {
-                    for (i in frames.indices) {
-                        ensureActive()
-                        writer.addFrame(frameArgb(i))
-                        progress(renderShare * (i + 1) / frames.size)
-                    }
-                    writer.finish()
-                } catch (e: Throwable) {
-                    writer.abort()
-                    throw e
-                }
-            }
-            AnimationFormat.Gif -> {
-                val enc = GifEncoder(w, h, 1000 / fps)
+        val name = "${item.name}_${label}_$stamp.mp4"
+        insertWithFd(MediaKind.Video, name, "video/mp4", item) { fd ->
+            val writer = Mp4Writer(fd, w, h, fps)
+            try {
                 for (i in frames.indices) {
                     ensureActive()
-                    enc.add(frameArgb(i))
-                    progress(renderShare * (i + 1) / frames.size)
+                    val argb = lf.toArgb(lf.render(frames[i]))
+                    writer.addFrame(ImageOps.resizeArgb(argb, lf.width, lf.height, w, h))
+                    progress(0.98f * (i + 1) / frames.size)
                 }
-                insert(mediaKind, name, format.mime, item) { os ->
-                    enc.write(os) { progress(renderShare + (1 - renderShare) * it) }
-                }
+                writer.finish()
+            } catch (e: Throwable) {
+                writer.abort()
+                throw e
             }
         }.also { progress(1f) }
     }

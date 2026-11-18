@@ -34,19 +34,22 @@ The debug build installs as a separate app (`app.refocus.debug`), so both can si
 
 ## Viewer
 
-- **Focus mode:** tap to focus, pinch to zoom, two fingers to pan, double-tap to zoom in or out.
-- **Perspective mode:** drag the picture, or switch on tilt, to move the viewpoint. The depth of field is limited to f/5.3 or narrower in this mode, so the viewpoint has room to move.
+- **Focus mode:** tap the picture to focus there.
+- **Perspective mode:** drag the picture, or switch on tilt, to move the viewpoint. Taps do nothing in this mode. The depth of field is limited to f/5.3 or narrower here, so the viewpoint has room to move.
+- **Zoom:** there is none. At about 325 px the native resolution is too low for it.
 - **View menu** (layers icon): photo, depth map or depth overlay.
 - **Export** (share icon):
-  - *Image:* JPEG or PNG at 1–4×, with an optional 16-bit depth PNG. Saved to Pictures/Refocus.
-  - *Animation:* focus sweep, perspective orbit or tap-to-tap focus, as MP4 (Movies/Refocus) or GIF (Pictures/Refocus).
-  - *Original:* the RAW and its metadata, saved to Download/Refocus.
+  - *Image:* JPEG at 1–4×. For the depth map, optionally also a 16-bit depth PNG. Saved to Pictures/Refocus.
+  - *Animation:* an MP4 in Movies/Refocus.
+    - *Focus sweep:* near → far or far → near, 1–10 s, with your depth of field.
+    - *Perspective orbit:* your focus and depth of field (at most f/5.3). Each orbit lasts 1–10 s and repeats 1–5 times.
+- **Original RAW** (⋮ menu → Save original RAW): the RAW and its metadata, saved to Download/Refocus.
 
 ## Code
 
 | Module | Contents |
 |---|---|
-| `core/` | Pure Kotlin, testable on the PC. The camera protocol (`LytroClient`, port of `lytro/camera.py`), the light-field decoder, depth estimation and CPU renderer (`LightField`, port of `lytro/lightfield.py`), GIF and 16-bit PNG writers. |
+| `core/` | Pure Kotlin, testable on the PC. The camera protocol (`LytroClient`, port of `lytro/camera.py`), the light-field decoder, depth estimation and CPU renderer (`LightField`, port of `lytro/lightfield.py`), 16-bit PNG writer. |
 | `app/camera/` | WiFi detection and binding (`CameraNetwork`), the single camera connection and its priority download queue (`CameraSession`). |
 | `app/processing/` | Background decoding and depth estimation (`Processor`). |
 | `app/ui/viewer/gl/` | OpenGL ES 3 shift-and-add refocus renderer. |

@@ -8,7 +8,6 @@ import android.provider.Settings
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -16,11 +15,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.calculateCentroid
-import androidx.compose.foundation.gestures.calculatePan
-import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -50,7 +45,6 @@ import androidx.compose.material.icons.outlined.ScreenRotation
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined._3dRotation
 import androidx.compose.material.icons.rounded.Check
-import androidx.compose.material.icons.rounded.FilterCenterFocus
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -121,7 +115,6 @@ import app.refocus.ui.viewer.gl.RefocusRenderer
 import app.refocus.ui.viewer.gl.ViewMode
 import app.refocus.ui.viewer.gl.ViewTransform
 import kotlinx.coroutines.launch
-import kotlin.math.abs
 import kotlin.math.min
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -235,15 +228,10 @@ fun ViewerScreen(graph: AppGraph, id: String, onBack: () -> Unit) {
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 if (lf != null) {
                     RefocusImage(vm, lf, MaterialTheme.colorScheme.surface) { tap ->
-                        when {
-                            vm.pick != null -> vm.pickPoint(tap.first, tap.second)
-                            else -> {
-                                val s = vm.focusSlopeAt(tap.first, tap.second)
-                                if (s != null) animateFocus(s) else {
-                                    vm.pendingFocus = tap
-                                    scope.launch { snackbar.showSnackbar("Still estimating depth. It will focus there as soon as it's ready.") }
-                                }
-                            }
+                        val s = vm.focusSlopeAt(tap.first, tap.second)
+                        if (s != null) animateFocus(s) else {
+                            vm.pendingFocus = tap
+                            scope.launch { snackbar.showSnackbar("Still estimating depth. It will focus there as soon as it's ready.") }
                         }
                     }
                 } else {
@@ -257,7 +245,7 @@ fun ViewerScreen(graph: AppGraph, id: String, onBack: () -> Unit) {
 
                 // depth still being estimated
                 Overlay(
-                    visible = lf != null && !current.hasDepth && vm.pick == null,
+                    visible = lf != null && !current.hasDepth,
                     enter = fadeIn(), exit = fadeOut(),
                     modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp),
                 ) {
@@ -275,26 +263,6 @@ fun ViewerScreen(graph: AppGraph, id: String, onBack: () -> Unit) {
                     }
                 }
 
-                // choosing tap-to-tap points
-                Overlay(
-                    visible = vm.pick != null,
-                    enter = slideInVertically() + fadeIn(), exit = slideOutVertically() + fadeOut(),
-                    modifier = Modifier.align(Alignment.TopCenter).padding(12.dp),
-                ) {
-                    Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.secondaryContainer, shadowElevation = 4.dp) {
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 16.dp, end = 4.dp)) {
-                            Icon(Icons.Rounded.FilterCenterFocus, null)
-                            Spacer(Modifier.width(12.dp))
-                            Text(
-                                if (vm.pick?.first == null) "Tap where the focus starts" else "Now tap where it ends",
-                                style = MaterialTheme.typography.bodyMedium,
-                                modifier = Modifier.weight(1f, fill = false),
-                            )
-                            TextButton(onClick = { vm.cancelPick() }) { Text("Cancel") }
-                        }
-                    }
-                }
-
                 // export running
                 Overlay(
                     visible = vm.exportProgress != null,
@@ -306,7 +274,7 @@ fun ViewerScreen(graph: AppGraph, id: String, onBack: () -> Unit) {
                             val p = vm.exportProgress ?: 0f
                             Text("Exporting · ${(p * 100).toInt()} %", style = MaterialTheme.typography.labelLarge)
                             Spacer(Modifier.height(8.dp))
-                            LinearProgressIndicator(progress = { p }, modifier = Modifier.fillMaxWidth())
+                            LinearProgressIndicator(progress = { p }, modifier = Modifier.fillMaxWidth(), drawStopIndicator = {})
                         }
                     }
                 }
@@ -323,10 +291,9 @@ fun ViewerScreen(graph: AppGraph, id: String, onBack: () -> Unit) {
             imageHeight = lf.height,
             currentView = vm.viewMode,
             hasDepth = hasDepth,
-            hasRaw = current.rawDone,
-            onStill = { c, f, s, d -> showExport = false; vm.exportStill(c, f, s, d) },
+            pinhole = RenderParams.fNumber(LightField.RADIUS * (1f - vm.dof)) == null,
+            onStill = { c, s, d -> showExport = false; vm.exportStill(c, s, d) },
             onAnimation = { k, r -> showExport = false; vm.exportAnimation(k, r) },
-            onOriginal = { showExport = false; vm.exportOriginal() },
             onDismiss = { showExport = false },
         )
     }
@@ -366,7 +333,8 @@ fun ViewerScreen(graph: AppGraph, id: String, onBack: () -> Unit) {
 private fun RefocusImage(vm: ViewerViewModel, lf: LightField, background: Color, onTap: (Pair<Float, Float>) -> Unit) {
     val renderer = remember { RefocusRenderer() }
     var glView by remember { mutableStateOf<GLSurfaceView?>(null) }
-    var transform by remember(lf) { mutableStateOf(ViewTransform()) }
+    // the image always fits the view (no zoom: the native resolution is only ~325 px)
+    val transform = remember { ViewTransform() }
     var ring by remember { mutableStateOf<Offset?>(null) }
     val ringAnim = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
@@ -420,82 +388,28 @@ private fun RefocusImage(vm: ViewerViewModel, lf: LightField, background: Color,
             modifier = Modifier.fillMaxSize(),
         )
 
-        // gestures: a layer above the GL surface
+        // gestures: a layer above the GL surface. Focus mode: tap to focus.
+        // Perspective mode: a one-finger drag moves the viewpoint (taps do nothing).
         Box(
             Modifier
                 .fillMaxSize()
-                .pointerInput(lf) {
-                    detectTapGestures(
-                        onTap = { o ->
-                            val w = size.width.toFloat(); val h = size.height.toFloat()
-                            transform.toImage(o.x, o.y, w, h, lf.width, lf.height)?.let {
-                                showRing(o)
-                                onTap(it)
-                            }
-                        },
-                        onDoubleTap = { o ->
-                            val w = size.width.toFloat(); val h = size.height.toFloat()
-                            val start = transform
-                            val target = if (start.zoom > 1.05f) ViewTransform() else {
-                                val c = Offset(o.x - w / 2, o.y - h / 2)
-                                val z = 2.5f
-                                ViewTransform(z, c.x + (start.panX - c.x) * z / start.zoom, c.y + (start.panY - c.y) * z / start.zoom)
-                                    .clamped(w, h, lf.width, lf.height)
-                            }
-                            scope.launch {
-                                animate(0f, 1f, animationSpec = tween(260, easing = FastOutSlowInEasing)) { t, _ ->
-                                    transform = ViewTransform(
-                                        start.zoom + (target.zoom - start.zoom) * t,
-                                        start.panX + (target.panX - start.panX) * t,
-                                        start.panY + (target.panY - start.panY) * t,
-                                    )
-                                }
-                            }
-                        },
-                    )
-                }
                 .pointerInput(lf, vm.mode) {
-                    awaitEachGesture {
-                        awaitFirstDown(requireUnconsumed = false)
-                        var moving = false
-                        var travelled = Offset.Zero
-                        var zoomed = 1f
-                        do {
-                            val event = awaitPointerEvent()
-                            val pressed = event.changes.count { it.pressed }
-                            val zc = event.calculateZoom()
-                            val pc = event.calculatePan()
-                            if (!moving) {
-                                travelled += pc
-                                zoomed *= zc
-                                if (travelled.getDistance() > viewConfiguration.touchSlop || abs(1 - zoomed) > 0.04f) moving = true
-                            }
-                            if (moving) {
-                                val w = size.width.toFloat()
-                                val h = size.height.toFloat()
-                                val t = transform
-                                when {
-                                    pressed >= 2 -> {
-                                        val c = event.calculateCentroid(useCurrent = true) - Offset(w / 2, h / 2)
-                                        val nz = (t.zoom * zc).coerceIn(1f, ViewTransform.MAX_ZOOM)
-                                        val f = nz / t.zoom
-                                        transform = ViewTransform(nz, c.x + (t.panX - c.x) * f + pc.x, c.y + (t.panY - c.y) * f + pc.y)
-                                            .clamped(w, h, lf.width, lf.height)
-                                        event.changes.forEach { it.consume() }
-                                    }
-                                    vm.mode == InteractionMode.Perspective && !vm.tilt -> {
-                                        // a drag across ~80 % of the view sweeps the full range
-                                        val k = 2f * vm.maxCenter.coerceAtLeast(0.01f) / (min(w, h) * 0.8f)
-                                        vm.setCenter(vm.centerU - pc.x * k, vm.centerV - pc.y * k)
-                                        event.changes.forEach { it.consume() }
-                                    }
-                                    t.zoom > 1.01f -> {
-                                        transform = t.copy(panX = t.panX + pc.x, panY = t.panY + pc.y).clamped(w, h, lf.width, lf.height)
-                                        event.changes.forEach { it.consume() }
-                                    }
-                                }
-                            }
-                        } while (event.changes.any { it.pressed })
+                    if (vm.mode != InteractionMode.Focus) return@pointerInput
+                    detectTapGestures(onTap = { o ->
+                        val w = size.width.toFloat(); val h = size.height.toFloat()
+                        transform.toImage(o.x, o.y, w, h, lf.width, lf.height)?.let {
+                            showRing(o)
+                            onTap(it)
+                        }
+                    })
+                }
+                .pointerInput(lf, vm.mode, vm.tilt) {
+                    if (vm.mode != InteractionMode.Perspective || vm.tilt) return@pointerInput
+                    detectDragGestures { change, drag ->
+                        change.consume()
+                        // a drag across ~80 % of the view sweeps the full range
+                        val k = 2f * vm.maxCenter.coerceAtLeast(0.01f) / (min(size.width, size.height) * 0.8f)
+                        vm.setCenter(vm.centerU - drag.x * k, vm.centerV - drag.y * k)
                     }
                 },
         )
@@ -550,7 +464,6 @@ private fun Controls(vm: ViewerViewModel, hasDepth: Boolean) {
                         FilledIconToggleButton(checked = vm.tilt, onCheckedChange = { vm.tilt = it; if (!it) vm.recenter() }) {
                             Icon(Icons.Outlined.ScreenRotation, if (vm.tilt) "Tilt control on" else "Tilt control off")
                         }
-                        IconButton(onClick = { vm.recenter() }) { Icon(Icons.Rounded.FilterCenterFocus, "Centre viewpoint") }
                     }
                 }
             }
@@ -558,7 +471,7 @@ private fun Controls(vm: ViewerViewModel, hasDepth: Boolean) {
                 when {
                     vm.mode == InteractionMode.Perspective && vm.tilt -> "Tilt the phone to look around the subject"
                     vm.mode == InteractionMode.Perspective -> "Drag the picture to change the viewpoint"
-                    hasDepth -> "Tap the picture to focus there · pinch to zoom"
+                    hasDepth -> "Tap the picture to focus there"
                     else -> "Tap to focus works once depth estimation finishes"
                 },
                 style = MaterialTheme.typography.bodySmall,

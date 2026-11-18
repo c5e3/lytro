@@ -522,6 +522,7 @@ private fun BatchCard(batch: BatchProgress, items: Map<String, PictureItem>, onS
             LinearProgressIndicator(
                 progress = { fraction },
                 modifier = Modifier.fillMaxWidth().padding(end = 12.dp),
+                drawStopIndicator = {},
             )
         }
     }

@@ -1,6 +1,5 @@
 package app.refocus.core
 
-import app.refocus.core.export.GifEncoder
 import app.refocus.core.export.Png16
 import app.refocus.core.lf.Half
 import app.refocus.core.lf.LfMetadata
@@ -144,17 +143,8 @@ class LightFieldTest {
     }
 
     @Test
-    fun gifAndPngAreReadable() {
+    fun depthPngIsReadable() {
         val w = 40; val h = 30
-        val enc = GifEncoder(w, h, 40)
-        repeat(5) { f -> enc.add(IntArray(w * h) { i -> (0xFF shl 24) or ((i * 7 + f * 30) and 0xFF shl 16) or ((i % w) * 6 shl 8) or (f * 50) }) }
-        val bytes = ByteArrayOutputStream().also { enc.write(it) }.toByteArray()
-        val reader = ImageIO.getImageReadersByFormatName("gif").next()
-        reader.input = ImageIO.createImageInputStream(ByteArrayInputStream(bytes))
-        assertEquals(5, reader.getNumImages(true))
-        val img = reader.read(4)
-        assertEquals(w, img.width)
-
         val px = ShortArray(w * h) { (it * 50).toShort() }
         val png = ByteArrayOutputStream().also { Png16.write(it, w, h, px) }.toByteArray()
         val back = ImageIO.read(ByteArrayInputStream(png))

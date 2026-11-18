@@ -14,6 +14,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.outlined.CameraAlt
 import androidx.compose.material.icons.outlined.DeleteSweep
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Memory
@@ -28,6 +29,7 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -39,10 +41,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -66,6 +70,8 @@ fun SettingsScreen(graph: AppGraph, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     var host by remember(address) { mutableStateOf(address.host) }
     var port by remember(address) { mutableStateOf(address.port.toString()) }
+    /** The address fields are read-only until editing is switched on. */
+    var editing by rememberSaveable { mutableStateOf(false) }
     var bytes by remember { mutableLongStateOf(0L) }
     var confirmClear by remember { mutableStateOf(false) }
     val local = items.values.count { it.rawDone }
@@ -74,7 +80,7 @@ fun SettingsScreen(graph: AppGraph, onBack: () -> Unit) {
     val hostValid = host.matches(Regex("^[0-9]{1,3}(\\.[0-9]{1,3}){3}$")) || host.matches(Regex("^[A-Za-z0-9.-]+$"))
     val portValue = port.toIntOrNull()?.takeIf { it in 1..65535 }
     fun save() {
-        if (hostValid && portValue != null) scope.launch { graph.settings.setAddress(CameraAddress(host.trim(), portValue)) }
+        if (editing && hostValid && portValue != null) scope.launch { graph.settings.setAddress(CameraAddress(host.trim(), portValue)) }
     }
 
     val scroll = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
@@ -91,6 +97,23 @@ fun SettingsScreen(graph: AppGraph, onBack: () -> Unit) {
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = 32.dp)) {
             item { Header("Camera") }
             item {
+                ListItem(
+                    leadingContent = { Icon(Icons.Outlined.Edit, null) },
+                    headlineContent = { Text("Edit camera address") },
+                    supportingContent = { Text("Only needed for testing or unusual setups") },
+                    trailingContent = {
+                        Switch(checked = editing, onCheckedChange = { on ->
+                            if (!on) {
+                                // leaving edit mode: keep what's saved, drop unsaved changes
+                                host = address.host
+                                port = address.port.toString()
+                            }
+                            editing = on
+                        })
+                    },
+                )
+            }
+            item {
                 Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         OutlinedTextField(
@@ -98,18 +121,20 @@ fun SettingsScreen(graph: AppGraph, onBack: () -> Unit) {
                             onValueChange = { host = it },
                             label = { Text("IP address") },
                             singleLine = true,
+                            readOnly = !editing,
                             isError = !hostValid,
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next),
-                            modifier = Modifier.weight(2f),
+                            modifier = Modifier.weight(2f).focusProperties { canFocus = editing },
                         )
                         OutlinedTextField(
                             value = port,
                             onValueChange = { port = it.filter(Char::isDigit).take(5) },
                             label = { Text("Port") },
                             singleLine = true,
+                            readOnly = !editing,
                             isError = portValue == null,
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier.weight(1f).focusProperties { canFocus = editing },
                         )
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -120,8 +145,8 @@ fun SettingsScreen(graph: AppGraph, onBack: () -> Unit) {
                             modifier = Modifier.weight(1f),
                         )
                         val changed = host.trim() != address.host || portValue != address.port
-                        if (changed) TextButton(onClick = ::save, enabled = hostValid && portValue != null) { Text("Save") }
-                        else if (!address.isDefault) TextButton(onClick = {
+                        if (editing && changed) TextButton(onClick = ::save, enabled = hostValid && portValue != null) { Text("Save") }
+                        else if (editing && !address.isDefault) TextButton(onClick = {
                             scope.launch { graph.settings.setAddress(CameraAddress()) }
                         }) { Text("Reset") }
                     }

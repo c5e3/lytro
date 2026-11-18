@@ -1,6 +1,5 @@
 package app.refocus.ui.viewer
 
-import android.net.Uri
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -15,10 +14,8 @@ import app.refocus.core.lf.LightField
 import app.refocus.core.lf.LightFieldStore
 import app.refocus.core.lf.RenderParams
 import app.refocus.data.PictureItem
-import app.refocus.export.AnimationFormat
 import app.refocus.export.Exported
 import app.refocus.export.StillContent
-import app.refocus.export.StillFormat
 import app.refocus.ui.viewer.gl.ViewMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -36,10 +33,8 @@ import kotlin.math.min
 
 enum class InteractionMode { Focus, Perspective }
 
-/** Choosing the two focus points of a tap-to-tap animation. */
-data class PickState(val first: Float? = null, val firstAt: Pair<Float, Float>? = null)
-
-data class AnimationRequest(val format: AnimationFormat, val scale: Int, val seconds: Int)
+/** [seconds]: length of the focus sweep, or of one orbit (repeated [cycles] times). */
+data class AnimationRequest(val scale: Int, val seconds: Int, val nearToFar: Boolean, val cycles: Int)
 
 sealed interface ViewerEvent {
     data class Message(val text: String) : ViewerEvent
@@ -76,9 +71,6 @@ class ViewerViewModel(private val graph: AppGraph, val id: String) : ViewModel()
     /** Export progress (0..1), null when idle. */
     var exportProgress by mutableStateOf<Float?>(null)
         private set
-    var pick by mutableStateOf<PickState?>(null)
-        private set
-    private var pendingAnimation: AnimationRequest? = null
     /** A tap that arrived before the depth map: focus there once it's ready. */
     var pendingFocus: Pair<Float, Float>? = null
 
@@ -202,61 +194,32 @@ class ViewerViewModel(private val graph: AppGraph, val id: String) : ViewModel()
     fun recenter() = setCenter(0f, 0f)
 
     // ---------------------------------------------------------------- export
-    fun exportStill(content: StillContent, format: StillFormat, scale: Int, depth16: Boolean) {
+    fun exportStill(content: StillContent, scale: Int, depth16: Boolean) {
         val lf = lightField ?: return
         val pic = item.value ?: return
         val params = renderParams
         runExport {
-            val files = graph.exporter.exportStill(pic, lf, params, content, format, scale, depth16)
+            val files = graph.exporter.exportStill(pic, lf, params, content, scale, depth16)
             ViewerEvent.Saved(if (files.size > 1) "Saved ${files.size} images to Pictures/Refocus" else "Saved to Pictures/Refocus", files)
         }
     }
 
     fun exportAnimation(kind: AnimationKind, request: AnimationRequest) {
-        if (kind == AnimationKind.TapToTap) {
-            pendingAnimation = request
-            pick = PickState()
-            return
-        }
-        startAnimation(kind, request, null, null)
-    }
-
-    private fun startAnimation(kind: AnimationKind, request: AnimationRequest, a: Float?, b: Float?) {
         val lf = lightField ?: return
         val pic = item.value ?: return
-        val params = renderParams
+        // the user's focus and depth of field; for the orbit the same aperture limit
+        // as perspective mode, so the viewpoint has room to move
+        val userAperture = LightField.RADIUS * (1f - dof)
+        val params = when (kind) {
+            AnimationKind.FocusSweep -> RenderParams(slope, userAperture)
+            AnimationKind.PerspectiveOrbit -> RenderParams(slope, min(userAperture, PERSPECTIVE_MAX_APERTURE))
+        }
         runExport { progress ->
-            val file = graph.exporter.exportAnimation(pic, lf, kind, params, a, b, request.format, request.scale, request.seconds, progress)
-            val where = if (request.format == AnimationFormat.Mp4) "Movies/Refocus" else "Pictures/Refocus"
-            ViewerEvent.Saved("Saved to $where", listOf(file))
+            val file = graph.exporter.exportAnimation(
+                pic, lf, kind, params, request.nearToFar, request.cycles, request.scale, request.seconds, progress,
+            )
+            ViewerEvent.Saved("Saved to Movies/Refocus", listOf(file))
         }
-    }
-
-    /** A tap while choosing tap-to-tap points. Returns true when it was consumed. */
-    fun pickPoint(x: Float, y: Float): Boolean {
-        val p = pick ?: return false
-        val lf = lightField ?: return true
-        if (lf.depth == null) {
-            _events.trySend(ViewerEvent.Message("Still estimating depth. Try again in a moment."))
-            return true
-        }
-        val s = lf.focusSlopeAt(x, y) ?: return true
-        if (p.first == null) {
-            pick = PickState(s, x to y)
-            _focusRequests.trySend(s)
-        } else {
-            pick = null
-            val req = pendingAnimation ?: return true
-            pendingAnimation = null
-            _focusRequests.trySend(s)
-            startAnimation(AnimationKind.TapToTap, req, p.first, s)
-        }
-        return true
-    }
-
-    fun cancelPick() {
-        pick = null
-        pendingAnimation = null
     }
 
     fun exportOriginal() {
@@ -283,9 +246,6 @@ class ViewerViewModel(private val graph: AppGraph, val id: String) : ViewModel()
             _events.trySend(event)
         }
     }
-
-    fun shareUris(files: List<Exported>): Pair<List<Uri>, String> =
-        files.map { it.uri } to (files.map { it.mime }.distinct().singleOrNull() ?: "*/*")
 
     override fun onCleared() {
         remembered[id] = Remembered(slope, dof, viewMode)
