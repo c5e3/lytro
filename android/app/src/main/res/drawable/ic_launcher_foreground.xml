@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- lens barrel -->
+    <path
+        android:pathData="M54,30a24,24 0,1 1,0 48a24,24 0,1 1,0 -48z"
+        android:strokeWidth="4"
+        android:strokeColor="#FFFFFFFF"
+        android:fillColor="#00000000" />
+    <!-- microlens array: hexagonal cluster, centre lens highlighted -->
+    <path android:fillColor="#FFFFC56E" android:pathData="M54,49a5,5 0,1 1,0 10a5,5 0,1 1,0 -10z" />
+    <path android:fillColor="#CCFFFFFF" android:pathData="M65,49.5a4.5,4.5 0,1 1,0 9a4.5,4.5 0,1 1,0 -9z" />
+    <path android:fillColor="#CCFFFFFF" android:pathData="M43,49.5a4.5,4.5 0,1 1,0 9a4.5,4.5 0,1 1,0 -9z" />
+    <path android:fillColor="#CCFFFFFF" android:pathData="M59.5,40a4.5,4.5 0,1 1,0 9a4.5,4.5 0,1 1,0 -9z" />
+    <path android:fillColor="#CCFFFFFF" android:pathData="M48.5,40a4.5,4.5 0,1 1,0 9a4.5,4.5 0,1 1,0 -9z" />
+    <path android:fillColor="#CCFFFFFF" android:pathData="M59.5,59a4.5,4.5 0,1 1,0 9a4.5,4.5 0,1 1,0 -9z" />
+    <path android:fillColor="#CCFFFFFF" android:pathData="M48.5,59a4.5,4.5 0,1 1,0 9a4.5,4.5 0,1 1,0 -9z" />
+</vector>

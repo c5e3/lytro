@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Refocus</string>
+    <string name="app_subtitle">A WiFi Lytro Viewer</string>
+    <string name="channel_transfers">Downloads &amp; processing</string>
+    <string name="channel_transfers_desc">Progress while pictures are downloaded from the camera and processed</string>
+</resources>
