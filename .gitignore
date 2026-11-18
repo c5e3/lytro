@@ -1,0 +1,44 @@
+# Camera data: downloaded pictures, decoded light fields, metadata.
+# The .TXT metadata contains the camera serial number - never commit it.
+cache/
+*.RAW
+*.raw
+*.128
+*.lf.npz
+IMG_*.TXT
+
+# Exports
+*.png
+*.jpg
+*.jpeg
+*.tif
+*.tiff
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Local Claude Code settings
+.claude/settings.local.json
